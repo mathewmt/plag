@@ -7,6 +7,15 @@ from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
 import re
 import nltk
+from sklearn.feature_extraction.text import TfidfVectorizer
+import numpy as np
+from apify_client import ApifyClient
+import requests
+from bs4 import BeautifulSoup
+
+from transformers import BertTokenizer, BertModel
+import torch
+from sklearn.metrics.pairwise import cosine_similarity
 
 # Initialize NLTK resources
 nltk.download('punkt')
@@ -30,21 +39,70 @@ class PreprocessTextView(APIView):
         # Join tokens back into text
         preprocessed_text = ' '.join(tokens)
         return preprocessed_text
+    
+    def vectorize_text(self, preprocessed_texts):
+        # Initialize the TF-IDF vectorizer
+        vectorizer = TfidfVectorizer()
+        # Fit-transform the preprocessed texts to get the TF-IDF matrix
+        tfidf_matrix = vectorizer.fit_transform(preprocessed_texts)
+        # Return the TF-IDF matrix and the feature names (words)
+        return tfidf_matrix, vectorizer.get_feature_names_out()
 
-    def jaccard_similarity(self, doc1, doc2):
-        # Convert preprocessed text into sets of words
-        words_doc1 = set(doc1.split())
-        words_doc2 = set(doc2.split())
+    def get_top_words(self, tfidf_matrix, feature_names, n=10):
+        # Get the average TF-IDF weights for each word across all texts
+        avg_tfidf_weights = np.mean(tfidf_matrix.toarray(), axis=0)
+        # Get the indices of the top N words with highest average TF-IDF weights
+        top_indices = np.argsort(avg_tfidf_weights)[::-1][:n]
+        # Get the words corresponding to the top indices
+        top_words = [feature_names[i] for i in top_indices]
+        # Return the top words
+        return top_words
+    
+    
+
+    def scrape_website(self,url):
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, "html.parser")
         
-        # Calculate Jaccard similarity coefficient
-        intersection = len(words_doc1.intersection(words_doc2))
-        union = len(words_doc1.union(words_doc2))
+        # Get the title of the page
+        title = soup.title.string if soup.title else "Title not found"
         
-        # Avoid division by zero
-        if union == 0:
-            return 0.0
+        # Get the main content of the page
+        main_content = soup.find("div", class_="elementor-column elementor-col-50 elementor-top-column elementor-element elementor-element-b22f800")
+        content = main_content.get_text() if main_content else "Main content not found"
         
-        return intersection / union
+        return title, url, content
+
+  
+
+
+    
+        
+
+
+    def __init__(self):
+        self.tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+        self.model = BertModel.from_pretrained('bert-base-uncased')
+        self.model.eval()
+    
+    def preprocess_text(self, text):
+        # Tokenize input text
+        input_ids = torch.tensor(self.tokenizer.encode(text, add_special_tokens=True)).unsqueeze(0)
+        # Get BERT embeddings
+        with torch.no_grad():
+            outputs = self.model(input_ids)
+            embeddings = outputs[0][:, 1:-1, :].mean(dim=1)  # Average pooling of token embeddings
+        return embeddings.numpy()
+    
+    def check_plagiarism(self, text1, text2):
+        embeddings1 = self.preprocess_text(text1)
+        embeddings2 = self.preprocess_text(text2)
+        
+        similarity = cosine_similarity(embeddings1, embeddings2)[0][0]
+        return similarity
+
+# Example usage
+
 
     def get(self, request):
         # Return an empty response for GET requests
@@ -57,9 +115,36 @@ class PreprocessTextView(APIView):
         # Perform text preprocessing
         preprocessed_text = self.preprocess_text(text)
 
-        # Compare preprocessed text with reference text (you need to define reference text)
-        reference_text = "This is the reference text for comparison."
-        similarity_score = self.jaccard_similarity(preprocessed_text, reference_text)
+       
+
+        # Vectorize text
+        #tfidf_matrix, feature_names = self.vectorize_text([preprocessed_text])
+
+        # Get top words
+        #top_words = self.get_top_words(tfidf_matrix, feature_names, n=10)
+
+        #query = ' '.join(top_words)
+        
+
+
+
+        # Print top words
+        #print("Top words:", top_words)
 
         # Return similarity score as JSON response
-        return Response({'similarity_score': similarity_score})
+
+        url = "https://roadsafetycanada.com/"
+        title, url, content = self.scrape_website(url)
+        
+
+        
+
+        text1 = text
+        text2 = content
+
+        similarity = self.check_plagiarism(text1, text2)
+        print("Cosine Similarity (Deep Plagiarism):", similarity)
+
+        
+        return Response({'top Words': content})
+
