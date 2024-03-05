@@ -58,8 +58,12 @@ class PreprocessTextView(APIView):
         # Return the top words
         return top_words
     
-    
 
+    # the text preprocessing and vectorzation are done to find the words with more weight, because this words are passing to APIFY to find the website realted to the input text
+    
+    #///////////////////////////////////////
+
+    # here we performed a web scrapping using beautifulsoup just to test the AI algorithm. Insted of this , The APIFY should be implemented here for the result 
     def scrape_website(self,url):
         response = requests.get(url)
         soup = BeautifulSoup(response.content, "html.parser")
@@ -76,7 +80,7 @@ class PreprocessTextView(APIView):
   
 
 
-    
+    #//////////////////////////// AI Algorithm//////////////////////////////
         
 
 
@@ -85,7 +89,7 @@ class PreprocessTextView(APIView):
         self.model = BertModel.from_pretrained('bert-base-uncased')
         self.model.eval()
     
-    def preprocess_text(self, text):
+    def preprocess_texts(self, text):
         # Tokenize input text
         input_ids = torch.tensor(self.tokenizer.encode(text, add_special_tokens=True)).unsqueeze(0)
         # Get BERT embeddings
@@ -95,13 +99,18 @@ class PreprocessTextView(APIView):
         return embeddings.numpy()
     
     def check_plagiarism(self, text1, text2):
-        embeddings1 = self.preprocess_text(text1)
-        embeddings2 = self.preprocess_text(text2)
+        embeddings1 = self.preprocess_texts(text1)
+        embeddings2 = self.preprocess_texts(text2)
+
+        # Print embeddings for debugging
+        print("Embeddings 1:", embeddings1)
+        print("Embeddings 2:", embeddings2)
         
         similarity = cosine_similarity(embeddings1, embeddings2)[0][0]
+
         return similarity
 
-# Example usage
+
 
 
     def get(self, request):
@@ -118,12 +127,12 @@ class PreprocessTextView(APIView):
        
 
         # Vectorize text
-        #tfidf_matrix, feature_names = self.vectorize_text([preprocessed_text])
+        tfidf_matrix, feature_names = self.vectorize_text([preprocessed_text])
 
         # Get top words
-        #top_words = self.get_top_words(tfidf_matrix, feature_names, n=10)
+        top_words = self.get_top_words(tfidf_matrix, feature_names, n=10)
 
-        #query = ' '.join(top_words)
+        query = ' '.join(top_words)
         
 
 
@@ -136,15 +145,20 @@ class PreprocessTextView(APIView):
         url = "https://roadsafetycanada.com/"
         title, url, content = self.scrape_website(url)
         
-
-        
-
         text1 = text
         text2 = content
 
         similarity = self.check_plagiarism(text1, text2)
-        print("Cosine Similarity (Deep Plagiarism):", similarity)
-
         
-        return Response({'top Words': content})
+        print("Cosine Similarity (Deep Plagiarism):", similarity)
+        
+        similarity_threshold = .85
+        if similarity < similarity_threshold:
+            similarity= "The texts have no similarity."
+        else:
+           similarity_message = "The texts have a similarity of {:.2f}%.".format(similarity)
+
+        return Response({'top_words': query, 'scrapped_data': content, 'similarity': similarity_message})
+
+
 
