@@ -17,6 +17,10 @@ from transformers import BertTokenizer, BertModel
 import torch
 from sklearn.metrics.pairwise import cosine_similarity
 
+import fitz
+from rest_framework.response import Response
+from rest_framework.views import APIView
+
 # Initialize NLTK resources
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -89,18 +93,39 @@ class PreprocessTextView(APIView):
         self.model = BertModel.from_pretrained('bert-base-uncased')
         self.model.eval()
     
-    def preprocess_texts(self, text):
-        # Tokenize input text
-        input_ids = torch.tensor(self.tokenizer.encode(text, add_special_tokens=True)).unsqueeze(0)
-        # Get BERT embeddings
-        with torch.no_grad():
-            outputs = self.model(input_ids)
-            embeddings = outputs[0][:, 1:-1, :].mean(dim=1)  # Average pooling of token embeddings
-        return embeddings.numpy()
+    def preprocess_text_in_chunks(self,text, max_chunk_length=510):
+        # Tokenize the text into words, consider using a more sophisticated approach for splitting
+        tokens = self.tokenizer.tokenize(text)
+        chunk_size = max_chunk_length  # Adjust based on the model's max input size and the need for special tokens
+ 
+        # Initialize empty list to store processed embeddings
+        all_embeddings = []
+ 
+        for i in range(0, len(tokens), chunk_size):
+            # Prepare chunk tokens with special tokens added
+            chunk_tokens = tokens[i:i+chunk_size]
+            chunk = ["[CLS]"] + chunk_tokens + ["[SEP]"]
+           
+            # Convert tokens to input IDs
+            input_ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(chunk)])
+ 
+            # Process the chunk through the model
+            with torch.no_grad():
+                outputs = self.model(input_ids)
+                embeddings = outputs[0][:, 1:-1, :].mean(dim=1)  # Adjust as necessary
+           
+            # Append the embeddings for this chunk
+            all_embeddings.append(embeddings)
+ 
+        # Aggregate embeddings from all chunks, example: mean of embeddings
+        # This part depends on your specific requirement
+        aggregated_embeddings = torch.mean(torch.stack(all_embeddings), dim=0)
+ 
+        return aggregated_embeddings.numpy()
     
     def check_plagiarism(self, text1, text2):
-        embeddings1 = self.preprocess_texts(text1)
-        embeddings2 = self.preprocess_texts(text2)
+        embeddings1 = self.preprocess_text_in_chunks(text1)
+        embeddings2 = self.preprocess_text_in_chunks(text2)
 
         # Print embeddings for debugging
         print("Embeddings 1:", embeddings1)
@@ -118,11 +143,35 @@ class PreprocessTextView(APIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
     def post(self, request):
-        # Get text data from request
-        text = request.data.get('text', '')
+         # Get the PDF file from the request
+        pdf_file = request.FILES.get('pdf_file')
+        if pdf_file:
+            if not pdf_file:
+                return Response({'error': 'No PDF file uploaded'}, status=400)
 
+            # Open the PDF file
+            pdf_document = fitz.open(stream=pdf_file.read(), filetype="pdf")
+
+            # Read the text from each page
+            text = ""
+            for page_num in range(pdf_document.page_count):
+                page = pdf_document.load_page(page_num)
+                text += page.get_text()
+
+            # Close the PDF file
+            pdf_document.close()
+
+            # Store the extracted text in a variable
+            extracted_text = text
+
+            print(extracted_text)
+
+        else:
+            extracted_text = request.data.get('text', '')
+
+        
         # Perform text preprocessing
-        preprocessed_text = self.preprocess_text(text)
+        preprocessed_text = self.preprocess_text(extracted_text)
 
        
 
@@ -145,7 +194,7 @@ class PreprocessTextView(APIView):
         url = "https://roadsafetycanada.com/"
         title, url, content = self.scrape_website(url)
         
-        text1 = text
+        text1 = extracted_text
         text2 = content
 
         similarity = self.check_plagiarism(text1, text2)
@@ -154,7 +203,7 @@ class PreprocessTextView(APIView):
         
         similarity_threshold = .85
         if similarity < similarity_threshold:
-            similarity= "The texts have no similarity."
+            similarity_message= "The texts have no similarity."
         else:
            similarity_message = "The texts have a similarity of {:.2f}%.".format(similarity)
 
