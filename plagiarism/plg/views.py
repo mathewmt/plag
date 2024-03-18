@@ -21,6 +21,11 @@ import fitz
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from selenium import webdriver
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.by import By
+import time
+
 # Initialize NLTK resources
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -67,19 +72,57 @@ class PreprocessTextView(APIView):
     
     #///////////////////////////////////////
 
+    
+    
     # here we performed a web scrapping using beautifulsoup just to test the AI algorithm. Insted of this , The APIFY should be implemented here for the result 
-    def scrape_website(self,url):
-        response = requests.get(url)
-        soup = BeautifulSoup(response.content, "html.parser")
-        
-        # Get the title of the page
-        title = soup.title.string if soup.title else "Title not found"
-        
-        # Get the main content of the page
-        main_content = soup.find("div", class_="elementor-column elementor-col-50 elementor-top-column elementor-element elementor-element-b22f800")
-        content = main_content.get_text() if main_content else "Main content not found"
-        
-        return title, url, content
+    
+    def get_urls_related_to_keywords(self,keywords):
+        # Configure the Selenium Chrome WebDriver
+        driver = webdriver.Chrome()
+
+        # Open Google search
+        driver.get("https://www.google.com")
+
+        # Find the search input element and enter the keywords
+        search_box = driver.find_element(By.NAME, "q")
+
+        search_box.send_keys(keywords)
+        search_box.send_keys(Keys.RETURN)
+
+        # Wait for the search results to load
+        time.sleep(2)
+
+        # Get the URLs of the first 15 search results
+        search_results = driver.find_elements(By.CSS_SELECTOR, ".tF2Cxc")
+
+        urls = []
+        for result in search_results[:10]:
+            url_element = result.find_element(By.CSS_SELECTOR, "a")
+            url = url_element.get_attribute("href")
+            urls.append(url)
+
+        # Close the browser
+        driver.quit()
+
+        return urls
+    
+    def scrape_urls(self,urls):
+        scraped_data = []
+        for url in urls:
+            try:
+                response = requests.get(url)
+                response.raise_for_status()  # Raise an exception for HTTP errors
+                soup = BeautifulSoup(response.content, "html.parser")
+                # Get the text content within the <body> tag
+                paragraphs = soup.find_all("p")
+                body_text = "\n".join([p.get_text(separator='\n') for p in paragraphs])
+                scraped_data.append({"url": url, "body_text": body_text})
+            except Exception as e:
+                print(f"Error scraping {url}: {e}")
+        return scraped_data
+
+    
+   
 
   
 
@@ -93,47 +136,45 @@ class PreprocessTextView(APIView):
         self.model = BertModel.from_pretrained('bert-base-uncased')
         self.model.eval()
     
-    def preprocess_text_in_chunks(self,text, max_chunk_length=510):
-        # Tokenize the text into words, consider using a more sophisticated approach for splitting
+    def preprocess_text_in_chunks(self, text, max_chunk_length=510):
         tokens = self.tokenizer.tokenize(text)
-        chunk_size = max_chunk_length  # Adjust based on the model's max input size and the need for special tokens
- 
-        # Initialize empty list to store processed embeddings
+        
+        if not tokens:
+            # Return zero embeddings if no tokens are produced
+            return torch.zeros((1, self.model.config.hidden_size))
+        
+        chunk_size = max_chunk_length
         all_embeddings = []
- 
+
         for i in range(0, len(tokens), chunk_size):
-            # Prepare chunk tokens with special tokens added
             chunk_tokens = tokens[i:i+chunk_size]
             chunk = ["[CLS]"] + chunk_tokens + ["[SEP]"]
-           
-            # Convert tokens to input IDs
+
             input_ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(chunk)])
- 
-            # Process the chunk through the model
+
             with torch.no_grad():
                 outputs = self.model(input_ids)
-                embeddings = outputs[0][:, 1:-1, :].mean(dim=1)  # Adjust as necessary
-           
-            # Append the embeddings for this chunk
+                embeddings = outputs[0][:, 1:-1, :].mean(dim=1)
+
             all_embeddings.append(embeddings)
- 
-        # Aggregate embeddings from all chunks, example: mean of embeddings
-        # This part depends on your specific requirement
+
         aggregated_embeddings = torch.mean(torch.stack(all_embeddings), dim=0)
- 
+
         return aggregated_embeddings.numpy()
+
     
-    def check_plagiarism(self, text1, text2):
-        embeddings1 = self.preprocess_text_in_chunks(text1)
-        embeddings2 = self.preprocess_text_in_chunks(text2)
+    def check_plagiarism(self, input_text, scraped_data):
+        input_embeddings = self.preprocess_text_in_chunks(input_text)
+        similarities = []
 
-        # Print embeddings for debugging
-        print("Embeddings 1:", embeddings1)
-        print("Embeddings 2:", embeddings2)
-        
-        similarity = cosine_similarity(embeddings1, embeddings2)[0][0]
+        for scraped_item in scraped_data:
+            scraped_text = scraped_item["body_text"]
+            scraped_embeddings = self.preprocess_text_in_chunks(scraped_text)
+            similarity = cosine_similarity(input_embeddings.reshape(1, -1), scraped_embeddings.reshape(1, -1))[0][0]
+            similarities.append({"url": scraped_item["url"], "similarity": similarity})
 
-        return similarity
+        return similarities
+
 
 
 
@@ -185,29 +226,42 @@ class PreprocessTextView(APIView):
         
 
 
+        keywords = query
+        urls = self.get_urls_related_to_keywords(keywords)
+        for url in urls:
+            print(url)
 
+        scraped_data = self.scrape_urls(urls)
+        for data in scraped_data:
+            print(data)
         # Print top words
         #print("Top words:", top_words)
 
         # Return similarity score as JSON response
 
-        url = "https://roadsafetycanada.com/"
-        title, url, content = self.scrape_website(url)
+        
         
         text1 = extracted_text
-        text2 = content
+        scraped_text= scraped_data
 
-        similarity = self.check_plagiarism(text1, text2)
+        similarity = self.check_plagiarism(extracted_text, scraped_data)
         
         print("Cosine Similarity (Deep Plagiarism):", similarity)
         
         similarity_threshold = .85
-        if similarity < similarity_threshold:
-            similarity_message= "The texts have no similarity."
-        else:
-           similarity_message = "The texts have a similarity of {:.2f}%.".format(similarity)
+        # List to store URLs with similarity score above the threshold
+        high_similarity_urls = []
 
-        return Response({'top_words': query, 'scrapped_data': content, 'similarity': similarity_message})
+        # Iterate over each similarity item
+        for similarity_item in similarity:
+            url = similarity_item["url"]
+            score = similarity_item["similarity"]
+            percentage = score * 100  # Convert similarity score to percentage
+            if score > similarity_threshold:
+                high_similarity_urls.append({"url": url, "similarity": percentage})
+
+
+        return Response({'top_words': query, 'scrapped_data': scraped_text, 'similarity': high_similarity_urls})
 
 
 
