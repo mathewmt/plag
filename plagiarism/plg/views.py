@@ -70,11 +70,9 @@ class PreprocessTextView(APIView):
 
     # the text preprocessing and vectorzation are done to find the words with more weight, because this words are passing to APIFY to find the website realted to the input text
     
-    #///////////////////////////////////////
+    #///////////////////////////////////////WEB SCRAPPING////////////////////////////////////////////////////////////////////////////////
 
     
-    
-    # here we performed a web scrapping using beautifulsoup just to test the AI algorithm. Insted of this , The APIFY should be implemented here for the result 
     
     def get_urls_related_to_keywords(self,keywords):
         # Configure the Selenium Chrome WebDriver
@@ -176,7 +174,7 @@ class PreprocessTextView(APIView):
         return similarities
 
 
-
+#////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
     def get(self, request):
@@ -241,7 +239,7 @@ class PreprocessTextView(APIView):
 
         
         
-        text1 = extracted_text
+        
         scraped_text= scraped_data
 
         similarity = self.check_plagiarism(extracted_text, scraped_data)
