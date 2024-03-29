@@ -25,6 +25,8 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.common.by import By
 import time
+from nltk.tokenize import sent_tokenize
+import numpy as np
 
 # Initialize NLTK resources
 nltk.download('punkt')
@@ -94,7 +96,7 @@ class PreprocessTextView(APIView):
         search_results = driver.find_elements(By.CSS_SELECTOR, ".tF2Cxc")
 
         urls = []
-        for result in search_results[:10]:
+        for result in search_results[:5]:
             url_element = result.find_element(By.CSS_SELECTOR, "a")
             url = url_element.get_attribute("href")
             urls.append(url)
@@ -135,17 +137,18 @@ class PreprocessTextView(APIView):
         self.model.eval()
     
     def preprocess_text_in_chunks(self, text, max_chunk_length=510):
-        tokens = self.tokenizer.tokenize(text)
-        
-        if not tokens:
-            # Return zero embeddings if no tokens are produced
-            return torch.zeros((1, self.model.config.hidden_size))
-        
-        chunk_size = max_chunk_length
+        sentences = sent_tokenize(text)
         all_embeddings = []
 
-        for i in range(0, len(tokens), chunk_size):
-            chunk_tokens = tokens[i:i+chunk_size]
+        for sentence in sentences:
+            tokens = self.tokenizer.tokenize(sentence)
+            
+            if not tokens:
+                # Skip empty tokens
+                continue
+            
+            chunk_size = min(max_chunk_length, len(tokens))
+            chunk_tokens = tokens[:chunk_size]
             chunk = ["[CLS]"] + chunk_tokens + ["[SEP]"]
 
             input_ids = torch.tensor([self.tokenizer.convert_tokens_to_ids(chunk)])
@@ -154,24 +157,50 @@ class PreprocessTextView(APIView):
                 outputs = self.model(input_ids)
                 embeddings = outputs[0][:, 1:-1, :].mean(dim=1)
 
+            # Remove extra dimensions
+            embeddings = embeddings.squeeze()
+
             all_embeddings.append(embeddings)
+
+        if not all_embeddings:
+            # Return zero embeddings if no embeddings were produced
+            return torch.zeros(self.model.config.hidden_size).numpy()
 
         aggregated_embeddings = torch.mean(torch.stack(all_embeddings), dim=0)
 
         return aggregated_embeddings.numpy()
 
     
+    
+
     def check_plagiarism(self, input_text, scraped_data):
-        input_embeddings = self.preprocess_text_in_chunks(input_text)
         similarities = []
 
         for scraped_item in scraped_data:
             scraped_text = scraped_item["body_text"]
-            scraped_embeddings = self.preprocess_text_in_chunks(scraped_text)
-            similarity = cosine_similarity(input_embeddings.reshape(1, -1), scraped_embeddings.reshape(1, -1))[0][0]
+            input_sentences = sent_tokenize(input_text)
+            scraped_sentences = sent_tokenize(scraped_text)
+            sentence_similarities = []
+
+            for input_sentence in input_sentences:
+                input_embeddings = self.preprocess_text_in_chunks(input_sentence)
+                max_similarity = 0
+
+                for scraped_sentence in scraped_sentences:
+                    scraped_embeddings = self.preprocess_text_in_chunks(scraped_sentence)
+                    similarity_matrix = cosine_similarity([input_embeddings], [scraped_embeddings])
+                    similarity = similarity_matrix[0][0]
+                    max_similarity = max(max_similarity, similarity)
+
+                sentence_similarities.append(max_similarity)
+
+            similarity = sum(sentence_similarities) / len(sentence_similarities) if len(sentence_similarities) > 0 else 0
             similarities.append({"url": scraped_item["url"], "similarity": similarity})
 
         return similarities
+    
+    
+
 
 
 #////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
