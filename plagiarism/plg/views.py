@@ -28,6 +28,9 @@ import time
 from nltk.tokenize import sent_tokenize
 import numpy as np
 
+from apify_client import ApifyClient
+
+
 # Initialize NLTK resources
 nltk.download('punkt')
 nltk.download('stopwords')
@@ -96,7 +99,7 @@ class PreprocessTextView(APIView):
         search_results = driver.find_elements(By.CSS_SELECTOR, ".tF2Cxc")
 
         urls = []
-        for result in search_results[:5]:
+        for result in search_results[:2]:
             url_element = result.find_element(By.CSS_SELECTOR, "a")
             url = url_element.get_attribute("href")
             urls.append(url)
@@ -105,7 +108,8 @@ class PreprocessTextView(APIView):
         driver.quit()
 
         return urls
-    
+        
+        
     def scrape_urls(self,urls):
         scraped_data = []
         for url in urls:
@@ -252,11 +256,15 @@ class PreprocessTextView(APIView):
         query = ' '.join(top_words)
         
 
-
+        
         keywords = query
         urls = self.get_urls_related_to_keywords(keywords)
-        for url in urls:
-            print(url)
+        if urls is not None:
+            for url in urls:
+                print(url)
+        else:
+            urls = 'https://roadsafetycanada.com/'
+
 
         scraped_data = self.scrape_urls(urls)
         for data in scraped_data:
