@@ -12,6 +12,7 @@ import numpy as np
 from apify_client import ApifyClient
 import requests
 from bs4 import BeautifulSoup
+import numpy as np
 
 from transformers import BertTokenizer, BertModel
 import torch
@@ -28,6 +29,7 @@ import time
 from nltk.tokenize import sent_tokenize
 import numpy as np
 
+import apify_client
 from apify_client import ApifyClient
 
 
@@ -79,40 +81,45 @@ class PreprocessTextView(APIView):
 
     
     
-    def get_urls_related_to_keywords(self,keywords):
-        # Configure the Selenium Chrome WebDriver
-        driver = webdriver.Chrome()
+    def get_urls_related_to_keywords(self, keywords):
+        # Initialize the Apify client with the API key
+        api_key='apify_api_GKK8k0hjHM3dmKs2yrFh8kBxpdXD4Z4126mf'
+        client = ApifyClient(api_key)
 
-        # Open Google search
-        driver.get("https://www.google.com")
+        # Configure the input for the Google Search Scraper actor
+        input = {
+            "queries": keywords,
+            
+        }
 
-        # Find the search input element and enter the keywords
-        search_box = driver.find_element(By.NAME, "q")
+        # Call the Google Search Scraper actor
+        run = client.actor('apify/google-search-scraper').call(run_input=input)
 
-        search_box.send_keys(keywords)
-        search_box.send_keys(Keys.RETURN)
+        # Get the default dataset ID
+        dataset_id = run['defaultDatasetId']
 
-        # Wait for the search results to load
-        time.sleep(2)
-
-        # Get the URLs of the first 15 search results
-        search_results = driver.find_elements(By.CSS_SELECTOR, ".tF2Cxc")
+        # Get the items from the dataset
+        
 
         urls = []
-        for result in search_results[:2]:
-            url_element = result.find_element(By.CSS_SELECTOR, "a")
-            url = url_element.get_attribute("href")
-            urls.append(url)
-
-        # Close the browser
-        driver.quit()
-
+        # Get the items from the dataset
+        items = client.dataset(dataset_id).list_items().items
+        for item in items:
+            organic_results = item.get('organicResults', [])
+            for result in organic_results:
+                url = result.get('url', None)
+                if url:
+                    urls.append(url)
+        # Extract URLs from the items
+        
         return urls
         
         
-    def scrape_urls(self,urls):
+    def scrape_urls(self, urls, limit=6):
         scraped_data = []
-        for url in urls:
+        for i, url in enumerate(urls):
+            if limit and i >= limit:
+                break
             try:
                 response = requests.get(url)
                 response.raise_for_status()  # Raise an exception for HTTP errors
@@ -173,9 +180,23 @@ class PreprocessTextView(APIView):
         aggregated_embeddings = torch.mean(torch.stack(all_embeddings), dim=0)
 
         return aggregated_embeddings.numpy()
+    
+    
 
     
     
+
+    def custom_similarity(self,vec1, vec2):
+    # Calculate the dot product
+        dot_product = sum([x * y for x, y in zip(vec1, vec2)])
+        
+        # Calculate the norm of the vectors
+        norm_vec1 = np.linalg.norm(vec1)
+        norm_vec2 = np.linalg.norm(vec2)
+        
+        # Calculate the similarity
+        similarity = dot_product / (norm_vec1 * norm_vec2) if norm_vec1 * norm_vec2 > 0 else 0.0
+        return similarity
 
     def check_plagiarism(self, input_text, scraped_data):
         similarities = []
@@ -192,8 +213,7 @@ class PreprocessTextView(APIView):
 
                 for scraped_sentence in scraped_sentences:
                     scraped_embeddings = self.preprocess_text_in_chunks(scraped_sentence)
-                    similarity_matrix = cosine_similarity([input_embeddings], [scraped_embeddings])
-                    similarity = similarity_matrix[0][0]
+                    similarity = self.custom_similarity(input_embeddings, scraped_embeddings)
                     max_similarity = max(max_similarity, similarity)
 
                 sentence_similarities.append(max_similarity)
@@ -202,6 +222,7 @@ class PreprocessTextView(APIView):
             similarities.append({"url": scraped_item["url"], "similarity": similarity})
 
         return similarities
+        
     
     
 
@@ -218,9 +239,6 @@ class PreprocessTextView(APIView):
          # Get the PDF file from the request
         pdf_file = request.FILES.get('pdf_file')
         if pdf_file:
-            if not pdf_file:
-                return Response({'error': 'No PDF file uploaded'}, status=400)
-
             # Open the PDF file
             pdf_document = fitz.open(stream=pdf_file.read(), filetype="pdf")
 
@@ -233,13 +251,10 @@ class PreprocessTextView(APIView):
             # Close the PDF file
             pdf_document.close()
 
-            # Store the extracted text in a variable
-            extracted_text = text
-
-            print(extracted_text)
-
         else:
-            extracted_text = request.data.get('text', '')
+            text = request.data.get('text', '')
+
+        extracted_text = text
 
         
         # Perform text preprocessing
@@ -261,7 +276,8 @@ class PreprocessTextView(APIView):
         urls = self.get_urls_related_to_keywords(keywords)
         if urls is not None:
             for url in urls:
-                print(url)
+                print(url, '\n')
+
         else:
             urls = 'https://roadsafetycanada.com/'
 

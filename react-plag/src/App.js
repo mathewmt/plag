@@ -17,8 +17,35 @@ function App() {
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     setUploadedFileName(file ? file.name : '');
-    // You can handle file processing logic here
+  
+    // Read the contents of the file
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const text = e.target.result;
+      // Now you can send the text content to your backend server
+      // using fetch or any other method
+      try {
+        const response = await fetch('http://localhost:8000/api/v1/preprocess_text_view/', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ pdfContent: text }),
+        });
+  
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+  
+        const data = await response.json();
+        console.log('Response from server:', data);
+      } catch (error) {
+        console.error('Error during file upload:', error);
+      }
+    };
+    reader.readAsText(file); // Read file as text
   };
+  
 
   const handlePlagiarismCheck = async () => {
     setLoading(true); // Set loading state to true
@@ -80,12 +107,16 @@ function App() {
       <div className="custom-portion">
         <button onClick={handlePlagiarismCheck}>Check Plagiarism</button>
         
-        {similarity && similarity.map((item, index) => (
-          <div key={index}>
-            <p>URL: {item.url}</p>
-            <p>Similarity: {item.similarity}</p>
-          </div>
-        ))}
+        {similarity && similarity.length > 0 ? (
+          similarity.map((item, index) => (
+            <div key={index}>
+              <p><a href={item.url} target="_blank" rel="noopener noreferrer">URL: {item.url}</a></p>
+              <p>Similarity: {item.similarity.toFixed(1)}</p>
+            </div>
+          ))
+        ) : (
+          <p>There is no plagiarism detected.</p>
+        )}
       </div>
     </div>
   );
